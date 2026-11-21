@@ -41,7 +41,7 @@ jobs:
           test ! -e "$app/_CodeSignature"
           test ! -e "$app/embedded.mobileprovision"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Info.plist"
-          lipo -verify_arch arm64 "$app/StudyLibrary"
+          lipo "$app/StudyLibrary" -verify_arch arm64
           ditto "$app" "$output/Payload/StudyLibrary.app"
           cd "$output"
           executable="Payload/StudyLibrary.app/StudyLibrary"
