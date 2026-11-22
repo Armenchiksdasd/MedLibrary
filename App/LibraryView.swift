@@ -2,13 +2,15 @@ import ImageIO
 import PhotosUI
 import QuickLook
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct LibraryView: View {
     @EnvironmentObject private var store: LibraryStore
     let parent: UUID?
     @State private var query = ""
-    @State private var importFiles = false
+    @State private var chooseFiles = false
+    @State private var pickedFiles: [URL]?
     @State private var pickPhotos = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var importingPhotos = false
@@ -73,7 +75,7 @@ struct LibraryView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("Импортировать файлы", systemImage: "square.and.arrow.down") { importFiles = true }
+                    Button("Импортировать файлы", systemImage: "square.and.arrow.down") { chooseFiles = true }
                     Button("Добавить из Фото", systemImage: "photo.on.rectangle") { pickPhotos = true }
                     Button("Новая папка", systemImage: "folder.badge.plus") {
                         draftName = ""
@@ -86,8 +88,11 @@ struct LibraryView: View {
                 .disabled(importingPhotos || (parent != nil && current == nil))
             }
         }
-        .fileImporter(isPresented: $importFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            perform { try store.importFiles(result.get(), into: parent) }
+        .sheet(isPresented: $chooseFiles, onDismiss: importPickedFiles) {
+            LibraryDocumentPicker { selection in
+                pickedFiles = selection
+                chooseFiles = false
+            }
         }
         .photosPicker(isPresented: $pickPhotos, selection: $photos, maxSelectionCount: 20,
                       matching: .images, preferredItemEncoding: .current)
@@ -240,6 +245,16 @@ struct LibraryView: View {
         catch { self.error = error.localizedDescription }
     }
 
+    private func importPickedFiles() {
+        guard let urls = pickedFiles else { return }
+        pickedFiles = nil
+        perform {
+            guard !urls.isEmpty else { throw LibraryError.unavailable }
+            try store.importFiles(urls, into: parent, source: .localCopy)
+            query = ""
+        }
+    }
+
     private func importPhotos(_ selection: [PhotosPickerItem]) async {
         let fm = FileManager.default
         let folder = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -265,8 +280,39 @@ struct LibraryView: View {
                 try data.write(to: url)
                 urls.append(url)
             }
-            try store.importFiles(urls, into: parent)
+            try store.importFiles(urls, into: parent, source: .localCopy)
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct LibraryDocumentPicker: UIViewControllerRepresentable {
+    let complete: ([URL]?) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(complete: complete) }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {
+        context.coordinator.complete = complete
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var complete: ([URL]?) -> Void
+
+        init(complete: @escaping ([URL]?) -> Void) { self.complete = complete }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            complete(urls)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            complete(nil)
+        }
     }
 }
 
