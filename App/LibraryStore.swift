@@ -137,37 +137,54 @@ final class LibraryStore: ObservableObject {
         pruneBlobs()
     }
 
-    func importFiles(_ urls: [URL], into parent: UUID?) throws {
+    enum ImportSource {
+        case externalDocument, localCopy
+    }
+
+    func importFiles(_ urls: [URL], into parent: UUID?, source: ImportSource = .externalDocument) throws {
         guard !archiveInProgress else { throw LibraryError.archiveInProgress }
         try validateParent(parent)
         var next = state
         var created: [URL] = []
         do {
             for url in urls {
-                let access = url.startAccessingSecurityScopedResource()
-                defer { if access { url.stopAccessingSecurityScopedResource() } }
-                guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
-                    throw LibraryError.unavailable
-                }
                 let name = uniqueName(url.lastPathComponent, parent: parent, in: next.items)
                 let entry = LibraryItem(parent: parent, kind: .file, name: name)
                 let target = blob(entry.id)
                 created.append(target)
-                let coordinator = NSFileCoordinator(filePresenter: nil)
-                var coordinationError: NSError?
-                var copyResult: Result<Void, Error>?
-                coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { readable in
-                    copyResult = Result { try FileManager.default.copyItem(at: readable, to: target) }
-                }
-                if let coordinationError { throw coordinationError }
-                guard let copyResult else { throw LibraryError.unavailable }
-                try copyResult.get()
+                try copyImport(from: url, to: target, source: source)
                 next.items.append(entry)
             }
             try commit(next)
         } catch {
             created.forEach { try? fm.removeItem(at: $0) }
             throw error
+        }
+    }
+
+    private func copyImport(from url: URL, to target: URL, source: ImportSource) throws {
+        func copyFile(_ readable: URL) throws {
+            guard try readable.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                throw LibraryError.unavailable
+            }
+            try FileManager.default.copyItem(at: readable, to: target)
+        }
+
+        switch source {
+        case .localCopy:
+            try copyFile(url)
+        case .externalDocument:
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            let coordinator = NSFileCoordinator(filePresenter: nil)
+            var coordinationError: NSError?
+            var copyResult: Result<Void, Error>?
+            coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { readable in
+                copyResult = Result { try copyFile(readable) }
+            }
+            if let coordinationError { throw coordinationError }
+            guard let copyResult else { throw LibraryError.unavailable }
+            try copyResult.get()
         }
     }
 
